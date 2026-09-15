@@ -1,0 +1,32 @@
+# Secrets and local env
+.env
+.env.local
+.env.*.local
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Temporary audio, search results, and recordings
+backend/storage/**
+!backend/storage/.gitkeep
+*.webm
+*.ogg
+*.wav
+*.mp3
+*.m4a
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

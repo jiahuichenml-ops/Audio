@@ -1,0 +1,151 @@
+# 语音约碰面地点
+
+同一座城市内，按住说话，为两个人找中间附近的碰面地点。
+
+当前进度：后端 `GET /health`、`POST /upload` + 前端本地录音。识别、提取、搜店和播报尚未实现；前端仍不调用上传接口。
+
+## 环境依赖
+
+- Python 3.11
+- Node.js 22.12 及以上的 22.x
+- **上传接口需要 `ffprobe`**（FFmpeg 自带）。它只探测真实容器、编码和时长，**不会转码**。本机当前若未安装，真实上传会返回 502。macOS 安装（由你执行，不要省略）：
+
+```bash
+brew install ffmpeg
+ffprobe -version
+```
+
+密钥或账号权限未确认，不阻塞健康检查和上传骨架；没有 `ffprobe` 时无法完成真实上传校验。
+
+## 配置
+
+1. 复制密钥模板（不要把填好的 `.env` 提交到 Git）：
+
+```bash
+cd backend
+cp .env.example .env
+```
+
+2. `.env.example` 只保留空密钥。真实的 `BAILIAN_API_KEY`、`DEEPSEEK_API_KEY`、`AMAP_API_KEY` 由你填入本地 `.env`。高德使用 Web 服务类型 Key。
+3. 百炼使用北京地域。ASR、TTS、DeepSeek 的模型名和请求地址分开配置。
+4. 即使不填写任何密钥，`GET /health` 也应返回成功。`POST /upload` 不调用外部付费接口，但依赖本机 `ffprobe`。
+
+## 启动
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn main:app --host 127.0.0.1 --port 8003 --reload
+```
+
+```bash
+cd frontend
+npm run dev
+```
+
+## 如何用 /docs 上传刚下载的录音
+
+1. 前端按住录音并下载，例如 `~/Downloads/meetup-recording.webm`。
+2. 确认已安装 `ffprobe`，后端已启动。
+3. 打开 [http://127.0.0.1:8003/docs](http://127.0.0.1:8003/docs)
+4. 找到 `POST /upload` → Try it out → 在 `file` 选择下载的录音 → Execute。字段名必须是 `file`。
+
+### 正常上传
+
+- 状态码：`200`
+- 响应示例（`request_id`、`audio_id` 每次不同）：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "data": {
+    "audio_id": "b6c1f2a0-4d3e-4c8a-9f11-2a7c0e8d91aa"
+  }
+}
+```
+
+`audio_id` 是临时编号，不是服务器路径。文件保存在 `backend/storage/audio/<audio_id>/recording.webm`（或 `.ogg`），同目录 `meta.json` 记录创建时间，供 24 小时有效期校验。接口响应里不会出现这些路径。
+
+缺少 Duration 元数据的浏览器录音：先读 stream/format 时长；没有则用音频包时间戳计算，不把「没有 Duration」直接判为非法。
+
+### 异常用例
+
+| 做法 | 状态码 | 响应示例 |
+| --- | --- | --- |
+| 上传 `.txt` 或把扩展名改成 `.webm` 的非 Opus 文件 | 415 | 见下 |
+| 上传大于 5MB 的文件 | 413 | 见下 |
+| 用极短录音（探测时长 &lt; 1 秒）或人为构造超 60 秒 | 422 | 见下 |
+| 未安装 ffprobe | 502 | `PROBE_UNAVAILABLE` |
+
+格式不支持（415）：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "error": {
+    "code": "UNSUPPORTED_MEDIA_TYPE",
+    "message": "不支持的录音格式，请使用浏览器录制的 WebM/Opus 或 Ogg/Opus。",
+    "stage": "upload"
+  }
+}
+```
+
+文件过大（413）：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "error": {
+    "code": "FILE_TOO_LARGE",
+    "message": "录音文件过大，最大允许 5MB。",
+    "stage": "upload"
+  }
+}
+```
+
+时长过短（422）：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "error": {
+    "code": "DURATION_TOO_SHORT",
+    "message": "录音时长过短，请按住至少 1 秒后重试。",
+    "stage": "upload"
+  }
+}
+```
+
+时长过长（422）的 `code` 为 `DURATION_TOO_LONG`，文案为「录音时长超过 60 秒，请缩短后重试。」
+
+缺少 `file` 字段（422）：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "请求缺少必要字段或字段类型不正确，请检查后重试。",
+    "stage": "request"
+  }
+}
+```
+
+## 可选 Mock 测试
+
+不调用外部付费接口，也不需要真实 ffprobe：
+
+```bash
+cd backend
+source .venv/bin/activate
+pytest -q
+```
+
+Mock 通过不能证明真实录音上传已跑通，更不能证明 ASR 已跑通。
+
+## 尚未实现
+
+- 前端把录音 POST 到 `/upload`
+- `POST /asr`、`/extract`、`/search`、`/finalize`
+- `GET /audio/{audio_id}` 播放接口
+- 两套 DeepSeek 提示词
