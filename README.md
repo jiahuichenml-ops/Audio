@@ -2,7 +2,7 @@
 
 同一座城市内，按住说话，为两个人找中间附近的碰面地点。
 
-当前进度：后端 `GET /health`、`POST /upload` + 前端本地录音。识别、提取、搜店和播报尚未实现；前端仍不调用上传接口。
+当前进度：后端 `GET /health`、`POST /upload`、`POST /asr` + 前端本地录音。提取、找店和播报尚未实现；前端仍不调用业务接口。
 
 ## 环境依赖
 
@@ -28,7 +28,7 @@ cp .env.example .env
 
 2. `.env.example` 只保留空密钥。真实的 `BAILIAN_API_KEY`、`DEEPSEEK_API_KEY`、`AMAP_API_KEY` 由你填入本地 `.env`。高德使用 Web 服务类型 Key。
 3. 百炼使用北京地域。ASR、TTS、DeepSeek 的模型名和请求地址分开配置。
-4. 即使不填写任何密钥，`GET /health` 也应返回成功。`POST /upload` 不调用外部付费接口，但依赖本机 `ffprobe`。
+4. 即使不填写任何密钥，`GET /health` 和 `POST /upload` 仍可工作（上传依赖 `ffprobe`）。`POST /asr` 默认需要 `BAILIAN_API_KEY`，会产生识别费用。本地联调可把 `ASR_MOCK=true`，返回固定演示文案，**不等于真实识别**。
 
 ## 启动
 
@@ -131,9 +131,67 @@ npm run dev
 }
 ```
 
+## 如何测试 POST /asr
+
+先 `POST /upload` 拿到真实 `audio_id`，再调用识别。不要把服务器文件路径当作编号。
+
+1. 在 `/docs` 上传录音，复制返回的 `data.audio_id`
+2. 打开 `POST /asr` → Try it out，请求体：
+
+```json
+{
+  "audio_id": "粘贴上一步的编号"
+}
+```
+
+### 超时预算
+
+- 读取编号、校验 24 小时有效期、用 ffprobe 复查格式：约 10 秒
+- 百炼 ASR：`ASR_TIMEOUT_S=40`
+- 本接口总预算约 50 秒。前端以后接入时超时应略长于 50 秒。本轮前端不调用此接口。
+
+### 本地 Mock（不调用百炼、不产生费用）
+
+在 `backend/.env` 设置后**重启后端**（改 Python 文件时 `--reload` 也会生效）：
+
+```
+ASR_MOCK=true
+ASR_MOCK_TEXT=我在杭州东站，朋友在西湖龙翔桥地铁站，帮我们找个中间的咖啡店。
+```
+
+仍须先 `POST /upload` 拿到未过期的 `audio_id`，接口会复查格式，但**不会**请求百炼。响应字段与真实识别相同，只有 `text` 来自配置，不是录音内容。关掉 Mock 或填了密钥后请把 `ASR_MOCK` 改回 `false`，否则会继续跳过付费接口。
+
+### 正常识别（需要真实密钥，会产生费用）
+
+`ASR_MOCK=false`，并在 `backend/.env` 填写 `BAILIAN_API_KEY` 后**重启后端**。状态码 `200`：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "data": {
+    "text": "我在杭州东站，朋友在西湖龙翔桥地铁站，帮我们找个中间的咖啡店。"
+  }
+}
+```
+
+`text` 来自百炼真实识别结果，不是固定占位文案。日志只记录阶段、耗时和字数，不会打印密钥或音频 Base64。
+
+### 异常
+
+| 做法 | 状态码 | code | 是否付费 |
+| --- | --- | --- | --- |
+| 随机/过期 `audio_id` | 404 | `AUDIO_NOT_FOUND` | Mock / 本地即可 |
+| 请求体缺少 `audio_id` | 422 | `INVALID_REQUEST` | Mock |
+| 未填写 `BAILIAN_API_KEY` 且 `ASR_MOCK=false` | 502 | `ASR_NOT_CONFIGURED` | 本地即可 |
+| 识别结果为空 | 422 | `ASR_EMPTY` | 真实调用或 Mock |
+| 百炼超时 | 504 | `ASR_TIMEOUT` | Mock 或真实慢网 |
+| 百炼失败/密钥无效 | 502 | `ASR_UPSTREAM` / `ASR_UNAUTHORIZED` | 真实密钥错误会失败，不循环重试 |
+
 ## 可选 Mock 测试
 
-不调用外部付费接口，也不需要真实 ffprobe：
+`ASR_MOCK=true` 时，`POST /asr` 本身就是本地固定文案，不是真实 ASR。
+
+不调用外部付费接口的 pytest：
 
 ```bash
 cd backend
@@ -141,11 +199,11 @@ source .venv/bin/activate
 pytest -q
 ```
 
-Mock 通过不能证明真实录音上传已跑通，更不能证明 ASR 已跑通。
+Mock 通过不能证明真实 ASR 已跑通。真实识别请你确认并执行，我不会自动调用付费接口。
 
 ## 尚未实现
 
-- 前端把录音 POST 到 `/upload`
-- `POST /asr`、`/extract`、`/search`、`/finalize`
+- 前端把录音 POST 到 `/upload` 再调用 `/asr`
+- `POST /extract`、`/search`、`/finalize`
 - `GET /audio/{audio_id}` 播放接口
 - 两套 DeepSeek 提示词

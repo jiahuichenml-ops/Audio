@@ -46,6 +46,7 @@ def run_ffprobe(
     args: list[str],
     timeout_s: float,
     runner: FfprobeRunner | None = None,
+    stage: str = STAGE,
 ) -> dict[str, Any]:
     execute = runner or subprocess.run
     if runner is None:
@@ -55,7 +56,7 @@ def run_ffprobe(
                 502,
                 "PROBE_UNAVAILABLE",
                 "服务器缺少音频探测工具 ffprobe，请先安装 FFmpeg。探测只读取容器、编码和时长，不会转码。macOS 可执行：brew install ffmpeg",
-                STAGE,
+                stage,
             )
     try:
         completed = execute(
@@ -70,23 +71,23 @@ def run_ffprobe(
             502,
             "PROBE_UNAVAILABLE",
             "服务器缺少音频探测工具 ffprobe，请先安装 FFmpeg。探测只读取容器、编码和时长，不会转码。macOS 可执行：brew install ffmpeg",
-            STAGE,
+            stage,
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise AppError(
             504,
             "PROBE_TIMEOUT",
             "音频探测超时，请稍后重试。",
-            STAGE,
+            stage,
         ) from exc
 
     if completed.returncode != 0:
-        logger.info("stage=upload probe_failed returncode=%s", completed.returncode)
+        logger.info("stage=%s probe_failed returncode=%s", stage, completed.returncode)
         raise AppError(
             415,
             "UNSUPPORTED_MEDIA_TYPE",
             "不支持的录音格式，请使用浏览器录制的 WebM/Opus 或 Ogg/Opus。",
-            STAGE,
+            stage,
         )
     try:
         payload = json.loads(completed.stdout or "{}")
@@ -95,14 +96,14 @@ def run_ffprobe(
             415,
             "UNSUPPORTED_MEDIA_TYPE",
             "不支持的录音格式，请使用浏览器录制的 WebM/Opus 或 Ogg/Opus。",
-            STAGE,
+            stage,
         ) from exc
     if not isinstance(payload, dict):
         raise AppError(
             415,
             "UNSUPPORTED_MEDIA_TYPE",
             "不支持的录音格式，请使用浏览器录制的 WebM/Opus 或 Ogg/Opus。",
-            STAGE,
+            stage,
         )
     return payload
 
@@ -154,6 +155,7 @@ def probe_audio(
     ffprobe_bin: str = "ffprobe",
     timeout_s: float = 10.0,
     runner: FfprobeRunner | None = None,
+    stage: str = STAGE,
 ) -> ProbeResult:
     metadata = run_ffprobe(
         [
@@ -168,6 +170,7 @@ def probe_audio(
         ],
         timeout_s=timeout_s,
         runner=runner,
+        stage=stage,
     )
     containers = _containers_of(metadata)
     if not any(name in ALLOWED_CONTAINERS for name in containers):
@@ -175,7 +178,7 @@ def probe_audio(
             415,
             "UNSUPPORTED_MEDIA_TYPE",
             "不支持的录音格式，请使用浏览器录制的 WebM/Opus 或 Ogg/Opus。",
-            STAGE,
+            stage,
         )
     stream = _audio_stream(metadata)
     codec = str((stream or {}).get("codec_name") or "").lower()
@@ -184,12 +187,11 @@ def probe_audio(
             415,
             "UNSUPPORTED_MEDIA_TYPE",
             "不支持的录音格式，请使用浏览器录制的 WebM/Opus 或 Ogg/Opus。",
-            STAGE,
+            stage,
         )
 
     duration_s, source = _duration_from_metadata(metadata)
     if duration_s is None:
-        # Browser WebM often omits Duration. Use packet timestamps instead of rejecting.
         packets = run_ffprobe(
             [
                 ffprobe_bin,
@@ -205,6 +207,7 @@ def probe_audio(
             ],
             timeout_s=timeout_s,
             runner=runner,
+            stage=stage,
         )
         duration_s = _duration_from_packets(packets)
         source = "packets"
@@ -214,11 +217,12 @@ def probe_audio(
             422,
             "INVALID_DURATION",
             "无法从音频流或时间戳读取录音时长，请重新录制。缺少 Duration 元数据本身不是错误。",
-            STAGE,
+            stage,
         )
 
     logger.info(
-        "stage=upload probe_ok containers=%s codec=%s duration_s=%.3f source=%s",
+        "stage=%s probe_ok containers=%s codec=%s duration_s=%.3f source=%s",
+        stage,
         ",".join(containers),
         codec,
         duration_s,

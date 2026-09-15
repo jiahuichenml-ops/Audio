@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
+from api.asr import router as asr_router
 from api.health import router as health_router
 from api.upload import router as upload_router
 from config import settings
@@ -32,7 +33,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="语音约碰面地点",
-    description="已提供健康检查和录音上传。识别、找店和播报尚未实现。",
+    description="已提供健康检查、录音上传和语音识别。找店和播报尚未实现。",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -116,3 +117,4 @@ async def http_error_handler(
 
 app.include_router(health_router)
 app.include_router(upload_router)
+app.include_router(asr_router)
