@@ -72,14 +72,14 @@ def save_audio(
     return stored_path
 
 
-def load_audio_record(audio_id: str) -> dict[str, Any]:
+def load_audio_record(audio_id: str, stage: str = "upload") -> dict[str, Any]:
     meta_path = _record_dir(audio_id) / "meta.json"
     if not meta_path.is_file():
         raise AppError(
             404,
             "AUDIO_NOT_FOUND",
             "录音编号不存在或已过期，请重新上传。",
-            "upload",
+            stage,
         )
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -89,14 +89,14 @@ def load_audio_record(audio_id: str) -> dict[str, Any]:
             404,
             "AUDIO_NOT_FOUND",
             "录音编号不存在或已过期，请重新上传。",
-            "upload",
+            stage,
         ) from exc
     if is_expired(created_at):
         raise AppError(
             404,
             "AUDIO_NOT_FOUND",
             "录音编号不存在或已过期，请重新上传。",
-            "upload",
+            stage,
         )
     stored_name = meta.get("stored_name")
     stored_path = _record_dir(audio_id) / stored_name if stored_name else None
@@ -105,9 +105,10 @@ def load_audio_record(audio_id: str) -> dict[str, Any]:
             404,
             "AUDIO_NOT_FOUND",
             "录音编号不存在或已过期，请重新上传。",
-            "upload",
+            stage,
         )
     meta["path"] = stored_path
+    meta["created_at_dt"] = created_at
     return meta
 
 

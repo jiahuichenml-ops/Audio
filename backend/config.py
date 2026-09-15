@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     temp_ttl_hours: int = 24
     ffprobe_path: str = "ffprobe"
     ffprobe_timeout_s: float = 10.0
+    asr_timeout_s: float = 40.0
+    asr_max_base64_bytes: int = 10 * 1024 * 1024
+    # Local only. true skips Bailian and returns asr_mock_text. Not a real transcript.
+    asr_mock: bool = False
+    asr_mock_text: str = (
+        "我在杭州东站，朋友在西湖龙翔桥地铁站，帮我们找个中间的咖啡店。"
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:
