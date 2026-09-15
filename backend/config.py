@@ -43,10 +43,15 @@ class Settings(BaseSettings):
     # deepseek-v4-flash remains accepted. This project keeps the confirmed name.
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_url: str = "https://api.deepseek.com/chat/completions"
+    extract_prompt_path: Path = Field(default=_BACKEND_DIR / "prompts" / "extract.txt")
+    extract_timeout_s: float = 20.0
+    extract_mock: bool = False
 
     # Official Amap Web service endpoints from the agreed spec.
     amap_geocode_url: str = "https://restapi.amap.com/v3/geocode/geo"
     amap_place_around_url: str = "https://restapi.amap.com/v3/place/around"
+    amap_timeout_s: float = 8.0
+    search_mock: bool = False
 
     storage_dir: Path = Field(default=_BACKEND_DIR / "storage")
     temp_ttl_hours: int = 24

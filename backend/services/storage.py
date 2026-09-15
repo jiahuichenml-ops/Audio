@@ -1,4 +1,4 @@
-"""Temporary audio files keyed by audio_id. Paths are never returned to clients."""
+"""Temporary audio and search records. Paths are never returned to clients."""
 
 from __future__ import annotations
 
@@ -23,6 +23,12 @@ def audio_root() -> Path:
     return path
 
 
+def search_root() -> Path:
+    path = settings.storage_dir / "search"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def tmp_root() -> Path:
     path = settings.storage_dir / "tmp"
     path.mkdir(parents=True, exist_ok=True)
@@ -34,6 +40,10 @@ def _record_dir(audio_id: str) -> Path:
 
 
 def new_audio_id() -> str:
+    return str(uuid4())
+
+
+def new_search_id() -> str:
     return str(uuid4())
 
 
@@ -112,12 +122,54 @@ def load_audio_record(audio_id: str, stage: str = "upload") -> dict[str, Any]:
     return meta
 
 
-def cleanup_expired(now: datetime | None = None) -> int:
-    removed = 0
-    current = now or _now()
-    if not audio_root().exists():
+def save_search_record(search_id: str, extra_meta: dict[str, Any]) -> Path:
+    destination = search_root() / search_id
+    destination.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "search_id": search_id,
+        "created_at": _now().isoformat(),
+        **extra_meta,
+    }
+    path = destination / "meta.json"
+    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def load_search_record(search_id: str, stage: str = "search") -> dict[str, Any]:
+    meta_path = search_root() / search_id / "meta.json"
+    if not meta_path.is_file():
+        raise AppError(
+            404,
+            "SEARCH_NOT_FOUND",
+            "查询编号不存在或已过期，请重新搜索。",
+            stage,
+        )
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        created_at = datetime.fromisoformat(meta["created_at"])
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        raise AppError(
+            404,
+            "SEARCH_NOT_FOUND",
+            "查询编号不存在或已过期，请重新搜索。",
+            stage,
+        ) from exc
+    if is_expired(created_at):
+        raise AppError(
+            404,
+            "SEARCH_NOT_FOUND",
+            "查询编号不存在或已过期，请重新搜索。",
+            stage,
+        )
+    meta["created_at_dt"] = created_at
+    return meta
+
+
+def _cleanup_root(root: Path, current: datetime) -> int:
+    if not root.exists():
         return 0
-    for record_dir in audio_root().iterdir():
+    removed = 0
+    for record_dir in root.iterdir():
         meta_path = record_dir / "meta.json"
         if not meta_path.is_file():
             continue
@@ -130,3 +182,8 @@ def cleanup_expired(now: datetime | None = None) -> int:
             shutil.rmtree(record_dir, ignore_errors=True)
             removed += 1
     return removed
+
+
+def cleanup_expired(now: datetime | None = None) -> int:
+    current = now or _now()
+    return _cleanup_root(audio_root(), current) + _cleanup_root(search_root(), current)

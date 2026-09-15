@@ -2,7 +2,7 @@
 
 同一座城市内，按住说话，为两个人找中间附近的碰面地点。
 
-当前进度：后端 `GET /health`、`POST /upload`、`POST /asr` + 前端本地录音。提取、找店和播报尚未实现；前端仍不调用业务接口。
+当前进度：后端 `GET /health`、`POST /upload`、`POST /asr`、`POST /extract`、`POST /search` + 前端本地录音。播报尚未实现；前端仍不调用业务接口。
 
 ## 环境依赖
 
@@ -28,7 +28,7 @@ cp .env.example .env
 
 2. `.env.example` 只保留空密钥。真实的 `BAILIAN_API_KEY`、`DEEPSEEK_API_KEY`、`AMAP_API_KEY` 由你填入本地 `.env`。高德使用 Web 服务类型 Key。
 3. 百炼使用北京地域。ASR、TTS、DeepSeek 的模型名和请求地址分开配置。
-4. 即使不填写任何密钥，`GET /health` 和 `POST /upload` 仍可工作（上传依赖 `ffprobe`）。`POST /asr` 默认需要 `BAILIAN_API_KEY`，会产生识别费用。本地联调可把 `ASR_MOCK=true`，返回固定演示文案，**不等于真实识别**。
+4. 即使不填写任何密钥，`GET /health` 和 `POST /upload` 仍可工作（上传依赖 `ffprobe`）。`POST /asr` 默认需要 `BAILIAN_API_KEY`。`POST /extract` 默认需要 `DEEPSEEK_API_KEY`。`POST /search` 默认需要 `AMAP_API_KEY`（Web 服务类型）。本地联调可把 `ASR_MOCK`、`EXTRACT_MOCK`、`SEARCH_MOCK` 设为 `true`，**不等于真实识别、提取或搜店**。
 
 ## 启动
 
@@ -199,11 +199,121 @@ source .venv/bin/activate
 pytest -q
 ```
 
-Mock 通过不能证明真实 ASR 已跑通。真实识别请你确认并执行，我不会自动调用付费接口。
+Mock 通过不能证明真实 ASR、DeepSeek 或高德已跑通。真实调用请你确认并执行，我不会自动调用付费接口。
+
+## 如何测试 POST /extract
+
+在 `/docs` 调用。请求体：
+
+```json
+{
+  "text": "我在杭州东站，朋友在西湖龙翔桥地铁站，帮我们找个中间的咖啡店。",
+  "city": "杭州"
+}
+```
+
+`city` 是页面选定城市；口述里没说城市时，用这个值。完整成功时 `data` **只有**五个字段，不含 `party_count`。
+
+### 本地 Mock
+
+`EXTRACT_MOCK=true` 时不调用 DeepSeek，固定返回杭州东站 / 龙翔桥 / 咖啡店。输入文本会被忽略。
+
+### 正常提取（需要 DEEPSEEK_API_KEY，会产生费用）
+
+`EXTRACT_MOCK=false`。DeepSeek 使用 `deepseek-v4-flash`，关闭思考，JSON 模式。提示词在 `backend/prompts/extract.txt`。接口总预算约 25 秒（其中模型约 20 秒）。
+
+状态码 `200`：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "data": {
+    "city_a": "杭州",
+    "address_a": "杭州东站",
+    "city_b": "杭州",
+    "address_b": "西湖龙翔桥地铁站",
+    "category": "咖啡店"
+  }
+}
+```
+
+可直接在 `/docs` 试的异常输入：
+
+| 请求 text | 预期 |
+| --- | --- |
+| 我在杭州东站，朋友在西湖龙翔桥地铁站，帮我们找个中间的咖啡店。 | 200，五个字段 |
+| 我在杭州，朋友也在杭州，找个咖啡店。 | 422 `ADDRESS_MISSING` |
+| 我在我家，朋友在公司，找个咖啡店。 | 422 `ADDRESS_MISSING` |
+| 我们三个人分别在杭州东站、龙翔桥和河坊街，找个咖啡店。 | 422 `PARTY_COUNT` |
+| 我在杭州东站，朋友在上海虹桥站，找个咖啡店。 | 422 `CROSS_CITY` |
+
+模型返回非法 JSON 或缺少约定字段是 502 `EXTRACT_INVALID_RESPONSE`，不要理解成「用户没说清楚」。未填密钥且未开 Mock 是 502 `EXTRACT_NOT_CONFIGURED`。
+
+## 如何测试 POST /search
+
+把 `/extract` 返回的五个字段原样作为请求体：
+
+```json
+{
+  "city_a": "杭州",
+  "address_a": "杭州东站",
+  "city_b": "杭州",
+  "address_b": "西湖龙翔桥地铁站",
+  "category": "咖啡店"
+}
+```
+
+### 本地 Mock
+
+`SEARCH_MOCK=true` 时不调用高德，返回演示中点和最多 3 家模拟店。店名带「模拟店」，不是真实 POI。
+
+### 正常搜店（需要 AMAP_API_KEY，会计入高德配额）
+
+`SEARCH_MOCK=false`。流程：
+
+1. 用 [地理编码](https://lbs.amap.com/api/webservice/guide/api/georegeo) 按城市查双方坐标，经度在前、纬度在后，保持高德坐标系。
+2. 结合城市、匹配级别、地名/地址筛选；国家/省/市/区县等过粗级别不用。多个不同候选即使相距不到 300 米也不会自动当成同一地点；无法区分则 422 `LOCATION_AMBIGUOUS`。
+3. 对经度、纬度分别求平均，得到地理中点。这只表示位置大致居中，**不能**理解成两人出行时间相同。
+4. 用 [周边搜索](https://lbs.amap.com/api/webservice/guide/api-advanced/search) 以类别为 `keywords`，先 2000 米，无有效店再 5000 米。
+5. 后端自己按「距离中点」升序排序，最多保留 3 家。优先用高德返回的有效距离；缺失时用候选坐标与中点计算，不把缺失填成 0。
+6. 保存结果 24 小时，返回 `search_id`（不是文件路径），供以后 `/finalize` 使用。
+
+单次高德超时 `AMAP_TIMEOUT_S=8`。本接口含两次定位和最多两次周边搜索，总预算约 45 秒。
+
+状态码 `200`：
+
+```json
+{
+  "request_id": "3f1c0b8e-4a2d-4c1e-9f0a-7b6d2e1c9a10",
+  "data": {
+    "search_id": "7c2e1b90-5d4a-4c8a-9f11-2a7c0e8d91aa",
+    "midpoint": {
+      "longitude": 120.1885,
+      "latitude": 30.2755
+    },
+    "pois": [
+      {
+        "name": "示例咖啡店",
+        "address": "杭州市上城区示例路1号",
+        "distance_to_midpoint_m": 180
+      }
+    ]
+  }
+}
+```
+
+`distance_to_midpoint_m` 单位是米，表示距离中点，不是步行或驾车时间。
+
+| 情况 | 状态码 | code |
+| --- | --- | --- |
+| 地点含糊或多种匹配无法区分 | 422 | `LOCATION_AMBIGUOUS` |
+| 2000 米和 5000 米都没有有效店 | 422 | `NO_CANDIDATES` |
+| 未填 `AMAP_API_KEY` 且 `SEARCH_MOCK=false` | 502 | `SEARCH_NOT_CONFIGURED` |
+| 高德超时 | 504 | `SEARCH_TIMEOUT` |
 
 ## 尚未实现
 
-- 前端把录音 POST 到 `/upload` 再调用 `/asr`
-- `POST /extract`、`/search`、`/finalize`
+- 前端把录音 POST 到 `/upload` 再调用 `/asr`、`/extract`、`/search`
+- `POST /finalize`
 - `GET /audio/{audio_id}` 播放接口
-- 两套 DeepSeek 提示词
+- 推荐语 DeepSeek 提示词
